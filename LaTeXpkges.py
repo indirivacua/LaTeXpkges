@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 
+import ast
 import re
 import os
 import sys
@@ -72,9 +73,9 @@ def substitute_line_in_file(path, line_no, new_str): # line_no is 1-based
     input_object = fileinput.input(path, inplace=True, backup=bak_ext)
     for line in input_object:
         if fileinput.filelineno() == line_no:
-            print new_str.rstrip("\n\r")
+            print(new_str.rstrip("\n\r"))
         else:
-            print line.rstrip("\n\r")
+            print(line.rstrip("\n\r"))
 
     return path+bak_ext
 
@@ -86,7 +87,7 @@ def build(dbgout=False):
     code = 0
 
     with open(os.devnull, 'w') as FNULL:
-        code = code + subprocess.call(["pdflatex", "-interaction=nonstopmode", "-halt-on-error",
+        code = code + subprocess.call(["pdflatex", "-interaction=nonstopmode", HALT,
                                        MAIN_FILE[:-4]], stdout=FNULL, stderr=subprocess.STDOUT)  # cut off the `.tex` ext
         if dbgout:
             sys.stdout.write(".")
@@ -95,25 +96,25 @@ def build(dbgout=False):
         if dbgout:
             sys.stdout.write(".")
             sys.stdout.flush()
-        code = code + subprocess.call(["pdflatex", "-interaction=nonstopmode", "-halt-on-error",
+        code = code + subprocess.call(["pdflatex", "-interaction=nonstopmode", HALT,
                                        MAIN_FILE[:-4]], stdout=FNULL, stderr=subprocess.STDOUT)
         if dbgout:
             sys.stdout.write(".")
             sys.stdout.flush()
-        code = code + subprocess.call(["pdflatex", "-interaction=nonstopmode", "-halt-on-error",
+        code = code + subprocess.call(["pdflatex", "-interaction=nonstopmode", HALT,
                                        MAIN_FILE[:-4]], stdout=FNULL, stderr=subprocess.STDOUT)
 
     if dbgout:
         print(" Done!")
 
-    return (code == 0) and os.path.exists(PDF_FILE)
+    return ((HALT == "") or (code == 0)) and os.path.exists(PDF_FILE)
 
 def file_md5(path=PDF_FILE, blocksize=65536):
     hasher = hashlib.md5()
 
     contents = None
     with open(path, 'rb') as infile:
-        contents = infile.read()
+        contents = infile.read().decode('utf-8', 'ignore')  # Convert bytes to string
 
     re_ID = re.compile(r'/ID\s+\[<[0-9A-Fa-f]+>\s+<[0-9A-Fa-f]+>\]\s+>>') # pdflatex puts a timestamp in every PDF
     re_Creation = re.compile(r'/CreationDate\s+\(D:[0-9+\'-]+\)')
@@ -124,7 +125,7 @@ def file_md5(path=PDF_FILE, blocksize=65536):
     contents = re.sub(re_Mod, '/ModDate ()', contents)
 
     for chunk in [contents[i:i+blocksize] for i in range(0, len(contents), blocksize)]:
-        hasher.update(chunk)
+        hasher.update(chunk.encode('utf-8'))  # Convert string back to bytes
 
     return hasher.hexdigest()
 
@@ -133,28 +134,32 @@ def find_occurences(path='.'):
     tex_files = list_all_tex_files(path)
     if len(tex_files) == 0:
         return
-    for line in fileinput.input(path + '\\' + tex_files):
-        if line.find("usepackage") != -1:
-            occ = {}
-            occ['filename'] = fileinput.filename()
-            occ['line_no'] = fileinput.filelineno()
-            occ['string'] = line
-            occurences.append(occ)
+    for tex_file in tex_files:
+        for line in fileinput.input(path + '\\' + tex_file):
+            if line.find("usepackage") != -1:
+                occ = {}
+                occ['filename'] = fileinput.filename()
+                occ['line_no'] = fileinput.filelineno()
+                occ['string'] = line
+                occurences.append(occ)
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(prog='LaTeXpkges', description='LaTeXpkges is a package cleanup utility for LaTeX.')
     parser.add_argument('path', help='Path to the folder (!) with your LaTeX files')
     parser.add_argument('name', help='Name of the main .tex file, which is passed to pdflatex for compilation')
+    parser.add_argument('halt', nargs='?', default="True", help='Set to True/False the flag halt-on-error that makes once an error is reached the run is aborted (default: True)')
 
     args = parser.parse_args()
+
+    HALT = "-halt-on-error" if ast.literal_eval(vars(args)['halt']) else ""
 
     PATH = vars(args)['path']
     if PATH[-1] != '\\':
         PATH = PATH + '\\'
     if not os.path.isdir(PATH):
-        print "Path is required to be a directory, which the supplied first argument is not!"
-        print "Try to run  LaTeXpkges --help"
-        print
+        print("Path is required to be a directory, which the supplied first argument is not!")
+        print("Try to run  LaTeXpkges --help")
+        print()
         exit()
 
     os.chdir(PATH)
@@ -162,46 +167,46 @@ if __name__ == '__main__':
     MAIN_FILE = vars(args)['name']
 
     if not os.path.exists(MAIN_FILE):
-        print "The file", MAIN_FILE, "does not exist in directory", PATH
-        print "Try to run  LaTeXpkges --help"
-        print
+        print("The file", MAIN_FILE, "does not exist in directory", PATH)
+        print("Try to run  LaTeXpkges --help")
+        print()
         exit()
 
     PDF_FILE = MAIN_FILE[:-3] + 'pdf'
 
     if not build(dbgout=True):
-        print "Initial build fails! Finishing now..."
+        print("Initial build fails! Finishing now...")
         exit()
 
-    print "Calculating the original checksum for " + PDF_FILE + "..."
-    original_md5 = file_md5()
-    print "MD5 for the original PDF is", original_md5
+    print("Calculating the original checksum for " + PDF_FILE + "...")
+    original_md5 = file_md5(PDF_FILE)
+    print("MD5 for the original PDF is", original_md5)
 
-    print "Looking for package imports in the files...",
+    print("Looking for package imports in the files...",)
     find_occurences()
-    print len(occurences), "were found."
+    print(len(occurences), "were found.")
 
     for occ in occurences:
         for (pkg, variant) in get_variants(occ['string']):
-            print "Testing if", pkg, "can be removed...",
+            print("Testing if", pkg, "can be removed...",)
             tmp_file = substitute_line_in_file(occ['filename'], occ['line_no'], variant)
             if build():                        # I don't remember lazy evaluation
-                new_md5 = file_md5()           #
+                new_md5 = file_md5(PDF_FILE)           #
                 if new_md5 == original_md5:    # rules in python :)
                     packages_to_delete.append(pkg)
-                    print "Yep."
+                    print("Yep.")
                 else:
-                    print "Nope. Checksum mismatch:", new_md5
+                    print("Nope. Checksum mismatch:", new_md5)
             else:
-                print "Nope. Build fails."
+                print("Nope. Build fails.")
             os.remove(occ['filename']) # on Windows you can't rename if the dst exists
             os.rename(tmp_file, occ['filename'])
             os.remove(PDF_FILE) if os.path.exists(PDF_FILE) else None
 
-    print
+    print()
     if len(packages_to_delete) > 0:
-        print "It looks like it's safe to remove these packages:"
+        print("It looks like it's safe to remove these packages:")
         for pkg in packages_to_delete:
-            print "\t"+pkg
+            print("\t"+pkg)
     else:
-        print "We didn't find packages that are safe to remove."
+        print("We didn't find packages that are safe to remove.")
